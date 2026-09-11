@@ -1,10 +1,8 @@
-﻿# -*- coding: utf-8 -*-
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import threading
-import webbrowser
+# -*- coding: utf-8 -*-
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 
-HOST = "127.0.0.1"
-PORT = 8001
+app = FastAPI(title="Origin")
 
 PAGE = r"""<!doctype html>
 <html lang="uk">
@@ -242,35 +240,10 @@ LOGIN_PAGE = r"""<!doctype html>
 </body>
 </html>"""
 
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    return PAGE
 
-class LandingPageHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path not in ("/", "/index.html", "/login"):
-            self.send_error(404)
-            return
-        content = (LOGIN_PAGE if self.path == "/login" else PAGE).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
-
-    def log_message(self, *_):
-        pass
-
-
-def main():
-    server = HTTPServer((HOST, PORT), LandingPageHandler)
-    url = f"http://{HOST}:{PORT}"
-    print(f"Origin запущено: {url}")
-    threading.Timer(0.4, lambda: webbrowser.open(url)).start()
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nOrigin зупинено.")
-    finally:
-        server.server_close()
-
-
-if __name__ == "__main__":
-    main()
+@app.get("/login", response_class=HTMLResponse)
+async def read_login():
+    return LOGIN_PAGE
