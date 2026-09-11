@@ -135,13 +135,15 @@ LOGIN_PAGE = r"""<!doctype html>
   <title>Вхід — Origin</title>
   <style>
     * { box-sizing: border-box; }
+    :root { --login-bg:#0f131d; --login-ink:#f1f3f9; --login-card:#171c28cc; --login-muted:#9da6ba; }
+    body.light { --login-bg:#f7f8fc; --login-ink:#17212b; --login-card:#ffffffdd; --login-muted:#667085; }
     body {
       margin: 0;
       min-height: 100vh;
       display: grid;
       place-items: center;
-      background: #0f131d;
-      color: #f1f3f9;
+      background: var(--login-bg);
+      color: var(--login-ink);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
       overflow: hidden;
     }
@@ -154,7 +156,7 @@ LOGIN_PAGE = r"""<!doctype html>
       z-index: 1;
       width: min(90%, 400px);
       padding: 40px 32px;
-      background: #171c28cc;
+      background: var(--login-card);
       border: 1px solid #ffffff14;
       border-radius: 24px;
       box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
@@ -183,7 +185,7 @@ LOGIN_PAGE = r"""<!doctype html>
       transform: rotate(-6deg);
     }
     h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: -0.5px; }
-    p { margin: 0 0 28px; color: #9da6ba; font-size: 14px; line-height: 1.5; }
+    p { margin: 0 0 28px;     color: var(--login-muted); font-size: 14px; line-height: 1.5; }
 
     .github-btn {
       width: 100%;
@@ -214,11 +216,13 @@ LOGIN_PAGE = r"""<!doctype html>
       transition: color 0.2s;
     }
     .back-link:hover { color: #fff; }
+    .theme-toggle { position:fixed; top:20px; right:20px; padding:9px 11px; border:1px solid #ffffff22; border-radius:10px; color:var(--login-ink); background:var(--login-card); cursor:pointer; }
   </style>
 </head>
 <body>
   <div class="orb one"></div>
   <div class="orb two"></div>
+  <button class="theme-toggle" id="themeToggle" aria-label="Змінити тему">☾</button>
 
   <div class="login-card">
     <a class="brand" href="/"><span class="mark">✦</span> origin</a>
@@ -234,6 +238,15 @@ LOGIN_PAGE = r"""<!doctype html>
 
     <a class="back-link" href="/">← На головну</a>
   </div>
+  <script>
+    const loginTheme = localStorage.getItem('origin-theme') || 'dark';
+    document.body.classList.toggle('light', loginTheme === 'light');
+    document.getElementById('themeToggle').onclick = () => {
+      const light = !document.body.classList.contains('light');
+      document.body.classList.toggle('light', light);
+      localStorage.setItem('origin-theme', light ? 'light' : 'dark');
+    };
+  </script>
 </body>
 </html>"""
 
