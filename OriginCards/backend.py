@@ -36,9 +36,9 @@ def _profile_page(profile: Dict[str, Any]) -> str:
     username = html.escape(profile["username"])
     avatar_url = html.escape(profile.get("avatar_url", ""), quote=True)
     avatar = (
-        f'<img id="avatarPreview" src="{avatar_url}" alt="Аватар">'
+        f'<img id="avatarPreview" class="avatar" src="{avatar_url}" alt="Аватар">'
         if avatar_url
-        else '<div id="avatarPreview" class="avatar-fallback">✦</div>'
+        else '<div id="avatarPreview" class="avatar avatar-fallback">✦</div>'
     )
 
     return f"""
@@ -47,40 +47,49 @@ def _profile_page(profile: Dict[str, Any]) -> str:
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>Твій профіль — Origin</title>
+      <title>Origin — твій простір</title>
       <style>
         :root {{ color-scheme: dark; }}
         * {{ box-sizing: border-box; }}
         body {{ margin: 0; min-height: 100vh; color: #f4f6fb;
           background: #0f131d; font-family: Inter, ui-sans-serif, system-ui,
           -apple-system, sans-serif; }}
-        .page {{ width: min(960px, calc(100% - 32px)); margin: auto;
+        .page {{ width: min(1080px, calc(100% - 32px)); margin: auto;
           padding: 28px 0 60px; }}
-        nav {{ display: flex; align-items: center; justify-content: space-between;
-          margin-bottom: 70px; }}
+        nav {{ display: flex; align-items: center; justify-content: space-between; }}
         .brand {{ color: #fff; text-decoration: none; font-size: 22px;
           font-weight: 800; }}
         .mark {{ display: inline-grid; width: 31px; height: 31px;
           margin-right: 8px; place-items: center; border-radius: 10px;
           color: #fff; background: #5865f2; transform: rotate(-6deg); }}
-        .logout {{ padding: 10px 14px; border: 1px solid #ffffff1f;
-          border-radius: 10px; color: #a8b0c0; text-decoration: none; }}
-        .welcome {{ margin-bottom: 28px; }}
-        .welcome h1 {{ margin: 0 0 10px; font-size: clamp(34px, 6vw, 58px);
-          letter-spacing: -2px; }}
-        .welcome p {{ margin: 0; color: #9da6ba; font-size: 17px; }}
-        .layout {{ display: grid; grid-template-columns: .8fr 1.2fr; gap: 22px; }}
-        .card {{ padding: 28px; border: 1px solid #ffffff14; border-radius: 22px;
-          background: #171c28; box-shadow: 0 22px 50px #0005; }}
-        .profile-card {{ display: flex; flex-direction: column; align-items: center;
-          justify-content: center; text-align: center; }}
-        .avatar-wrap {{ width: 130px; height: 130px; margin-bottom: 20px; }}
-        #avatarPreview, .avatar-fallback {{ width: 100%; height: 100%;
-          border: 3px solid #5865f2; border-radius: 50%; object-fit: cover; }}
+        .account {{ position: relative; }}
+        .avatar-button {{ width: 48px; height: 48px; padding: 0; border: 0;
+          border-radius: 50%; cursor: pointer; background: transparent; }}
+        .avatar {{ width: 48px; height: 48px; border: 2px solid #5865f2;
+          border-radius: 50%; object-fit: cover; }}
         .avatar-fallback {{ display: grid; place-items: center; color: #fff;
-          background: linear-gradient(135deg, #5865f2, #39c78a); font-size: 42px; }}
-        .profile-card h2 {{ margin: 0 0 8px; font-size: 24px; }}
-        .profile-card p {{ margin: 0; color: #9da6ba; }}
+          background: linear-gradient(135deg, #5865f2, #39c78a); font-size: 20px; }}
+        .menu {{ position: absolute; top: 60px; right: 0; z-index: 2;
+          display: none; min-width: 150px; padding: 8px; border: 1px solid #ffffff14;
+          border-radius: 12px; background: #171c28; box-shadow: 0 14px 35px #0008; }}
+        .menu.open {{ display: block; }}
+        .menu a, .menu button {{ display: block; width: 100%; padding: 10px;
+          border: 0; border-radius: 8px; color: #dce1ed; background: transparent;
+          text-align: left; text-decoration: none; font: inherit; cursor: pointer; }}
+        .menu a:hover, .menu button:hover {{ background: #ffffff10; }}
+        .welcome {{ max-width: 720px; margin: 150px auto 0; text-align: center; }}
+        .welcome h1 {{ margin: 0 0 14px; font-size: clamp(38px, 7vw, 72px);
+          letter-spacing: -3px; }}
+        .welcome p {{ margin: 0 0 34px; color: #9da6ba; font-size: 18px; }}
+        .create {{ display: inline-block; padding: 15px 24px; border-radius: 12px;
+          color: #fff; background: #5865f2; font-weight: 800; text-decoration: none;
+          box-shadow: 0 12px 28px #5865f244; }}
+        .create:hover {{ background: #6972ff; transform: translateY(-2px); }}
+        .modal {{ position: fixed; inset: 0; z-index: 3; display: none;
+          place-items: center; padding: 20px; background: #0009; }}
+        .modal.open {{ display: grid; }}
+        .card {{ width: min(100%, 430px); padding: 28px; border: 1px solid #ffffff14;
+          border-radius: 22px; background: #171c28; box-shadow: 0 22px 50px #0008; }}
         h3 {{ margin: 0 0 24px; font-size: 21px; }}
         label {{ display: block; margin: 0 0 8px; color: #c9ceda;
           font-size: 14px; font-weight: 700; }}
@@ -96,27 +105,32 @@ def _profile_page(profile: Dict[str, Any]) -> str:
         button:hover {{ background: #6972ff; }}
         #status {{ min-height: 20px; margin-top: 14px; color: #65cfad;
           font-size: 14px; text-align: center; }}
-        @media (max-width: 700px) {{ .layout {{ grid-template-columns: 1fr; }}
-          nav {{ margin-bottom: 48px; }} }}
+        .close {{ float: right; border: 0; color: #9da6ba; background: transparent;
+          font-size: 22px; cursor: pointer; }}
       </style>
     </head>
     <body>
       <div class="page">
         <nav>
           <a class="brand" href="/"><span class="mark">✦</span>origin</a>
-          <a class="logout" href="/auth/logout">Вийти</a>
+          <div class="account">
+            <button class="avatar-button" id="avatarButton" aria-label="Профіль">
+              {avatar}
+            </button>
+            <div class="menu" id="accountMenu">
+              <button id="editProfile">Редагувати профіль</button>
+              <a href="/auth/logout">Вийти</a>
+            </div>
+          </div>
         </nav>
         <section class="welcome">
           <h1>Вітаємо, {username}! 👋</h1>
-          <p>Це твій простір в Origin. Налаштуй профіль під себе.</p>
+          <p>Готовий перетворити ідею на результат?</p>
+          <a class="create" href="/boards/new">＋ Створити дошку</a>
         </section>
-        <section class="layout">
-          <div class="card profile-card">
-            <div class="avatar-wrap">{avatar}</div>
-            <h2 id="profileName">{username}</h2>
-            <p>Твій профіль Origin</p>
-          </div>
+        <div class="modal" id="profileModal">
           <form class="card" id="profileForm">
+            <button class="close" id="closeModal" type="button">×</button>
             <h3>Налаштування профілю</h3>
             <label for="nickname">Нікнейм</label>
             <input id="nickname" name="nickname" value="{username}"
@@ -128,13 +142,26 @@ def _profile_page(profile: Dict[str, Any]) -> str:
             <button type="submit">Зберегти зміни</button>
             <div id="status" role="status"></div>
           </form>
-        </section>
+        </div>
       </div>
       <script>
         const form = document.getElementById('profileForm');
         const fileInput = document.getElementById('avatar');
         const preview = document.getElementById('avatarPreview');
         const status = document.getElementById('status');
+        const modal = document.getElementById('profileModal');
+        const menu = document.getElementById('accountMenu');
+        document.getElementById('avatarButton').onclick = () =>
+          menu.classList.toggle('open');
+        document.getElementById('editProfile').onclick = () => {{
+          menu.classList.remove('open');
+          modal.classList.add('open');
+        }};
+        document.getElementById('closeModal').onclick = () =>
+          modal.classList.remove('open');
+        modal.onclick = (event) => {{
+          if (event.target === modal) modal.classList.remove('open');
+        }};
 
         fileInput.addEventListener('change', () => {{
           const file = fileInput.files[0];
@@ -178,9 +205,9 @@ def _profile_page(profile: Dict[str, Any]) -> str:
           status.textContent = data.message || data.detail;
           status.style.color = response.ok ? '#65cfad' : '#f1a6a0';
           if (response.ok) {{
-            document.getElementById('profileName').textContent = data.username;
             document.querySelector('.welcome h1').textContent =
               `Вітаємо, ${{data.username}}! 👋`;
+            modal.classList.remove('open');
           }}
         }});
       </script>
@@ -317,6 +344,44 @@ async def update_profile(request: Request):
 
     profile["username"] = nickname
     return JSONResponse({"message": "Профіль оновлено.", "username": nickname})
+
+
+@router.get("/boards/new", response_class=HTMLResponse)
+async def new_board(request: Request):
+    session_id = request.cookies.get(SESSION_COOKIE)
+    if session_id not in sessions:
+        return RedirectResponse("/login", status_code=303)
+    return HTMLResponse(
+        """
+        <!doctype html>
+        <html lang="uk">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Нова дошка — Origin</title>
+          <style>
+            body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+              color: #f4f6fb; background: #0f131d;
+              font-family: Inter, system-ui, sans-serif; text-align: center; }
+            .card { width: min(90%, 440px); padding: 34px; border-radius: 22px;
+              border: 1px solid #ffffff14; background: #171c28; }
+            h1 { margin: 0 0 10px; }
+            p { margin: 0 0 24px; color: #9da6ba; }
+            a { display: inline-block; padding: 12px 18px; border-radius: 10px;
+              color: #fff; background: #5865f2; text-decoration: none;
+              font-weight: 700; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h1>Нова дошка</h1>
+            <p>Робочий простір для твоїх ідей вже майже готовий.</p>
+            <a href="/dashboard">← Повернутися на головну</a>
+          </div>
+        </body>
+        </html>
+        """
+    )
 
 
 @router.get("/auth/logout")
