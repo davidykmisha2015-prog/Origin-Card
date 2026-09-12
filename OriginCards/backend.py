@@ -117,10 +117,12 @@ def _save_session(session_id: str, session: Dict[str, Any]) -> None:
         connection = _db_connection()
         try:
             if DATABASE_URL:
+                from psycopg.types.json import Jsonb
+
                 connection.execute(
                     "INSERT INTO origin_sessions (session_id, data) VALUES (%s, %s) "
                     "ON CONFLICT (session_id) DO UPDATE SET data = EXCLUDED.data",
-                    (session_id, serialized),
+                    (session_id, Jsonb(session)),
                 )
             else:
                 connection.execute(
@@ -488,7 +490,7 @@ async def github_callback(code: Optional[str] = None, error: Optional[str] = Non
             "active": True,
         }
     _save_session(session_id, session)
-    response = RedirectResponse("/dashboard", status_code=303)
+    response = RedirectResponse("/boards", status_code=303)
     response.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 7)
     return response
 
