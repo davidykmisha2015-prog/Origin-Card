@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Authenticated pages and the in-memory Origin board API."""
+"""Authenticated pages and the persistent Origin board API."""
 
 import html
 import asyncio
 import json
 import os
 import secrets
+import sqlite3
+import threading
 import urllib.parse
 import urllib.request
 from urllib.error import HTTPError, URLError
@@ -24,7 +26,129 @@ GITHUB_REDIRECT_URI = os.getenv(
     "GITHUB_REDIRECT_URI", "http://localhost:8000/auth/callback"
 )
 SESSION_COOKIE = "origin_session"
-sessions: Dict[str, Dict[str, Any]] = {}
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
+DATABASE_PATH = os.getenv(
+    "ORIGIN_DB_PATH",
+    os.path.join(os.getenv("DATA_DIR", os.path.dirname(__file__)), "origin.db"),
+)
+_db_lock = threading.Lock()
+
+
+def _db_connection():
+    if DATABASE_URL:
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise RuntimeError(
+                "Для PostgreSQL потрібен пакет psycopg[binary]."
+            ) from exc
+        return psycopg.connect(DATABASE_URL)
+    connection = sqlite3.connect(DATABASE_PATH, timeout=30)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def _init_database() -> None:
+    if not DATABASE_URL:
+        os.makedirs(os.path.dirname(os.path.abspath(DATABASE_PATH)), exist_ok=True)
+    with _db_lock:
+        connection = _db_connection()
+        try:
+            if DATABASE_URL:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS origin_sessions "
+                    "(session_id TEXT PRIMARY KEY, data JSONB NOT NULL)"
+                )
+            else:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS origin_sessions "
+                    "(session_id TEXT PRIMARY KEY, data TEXT NOT NULL)"
+                )
+            connection.commit()
+        finally:
+            connection.close()
+
+
+def _load_session(session_id: str) -> Optional[Dict[str, Any]]:
+    if not session_id:
+        return None
+    with _db_lock:
+        connection = _db_connection()
+        try:
+            row = connection.execute(
+                "SELECT data FROM origin_sessions WHERE session_id = %s"
+                if DATABASE_URL
+                else "SELECT data FROM origin_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if not row:
+                return None
+            data = row[0]
+            return data if isinstance(data, dict) else json.loads(data)
+        finally:
+            connection.close()
+
+
+def _find_github_session(user_data: Dict[str, Any]):
+    github_id = str(user_data.get("id", ""))
+    username = str(user_data.get("login", ""))
+    if not github_id and not username:
+        return None
+    with _db_lock:
+        connection = _db_connection()
+        try:
+            rows = connection.execute("SELECT session_id, data FROM origin_sessions").fetchall()
+            for row in rows:
+                data = row[1] if isinstance(row[1], dict) else json.loads(row[1])
+                if (github_id and str(data.get("github_id", "")) == github_id) or (
+                    not data.get("github_id") and username and data.get("username") == username
+                ):
+                    return row[0], data
+            return None
+        finally:
+            connection.close()
+
+
+def _save_session(session_id: str, session: Dict[str, Any]) -> None:
+    serialized = json.dumps(session, ensure_ascii=False)
+    with _db_lock:
+        connection = _db_connection()
+        try:
+            if DATABASE_URL:
+                connection.execute(
+                    "INSERT INTO origin_sessions (session_id, data) VALUES (%s, %s) "
+                    "ON CONFLICT (session_id) DO UPDATE SET data = EXCLUDED.data",
+                    (session_id, serialized),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO origin_sessions (session_id, data) VALUES (?, ?) "
+                    "ON CONFLICT(session_id) DO UPDATE SET data = excluded.data",
+                    (session_id, serialized),
+                )
+            connection.commit()
+        finally:
+            connection.close()
+
+
+def _delete_session(session_id: str) -> None:
+    with _db_lock:
+        connection = _db_connection()
+        try:
+            connection.execute(
+                "DELETE FROM origin_sessions WHERE session_id = %s"
+                if DATABASE_URL
+                else "DELETE FROM origin_sessions WHERE session_id = ?",
+                (session_id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+
+_init_database()
 
 
 def _now() -> str:
@@ -51,20 +175,33 @@ def _github_request(url: str, data: Optional[Dict[str, Any]] = None, headers: Op
 
 
 def _session(request: Request) -> Dict[str, Any]:
-    session = sessions.get(request.cookies.get(SESSION_COOKIE, ""))
-    if not session:
+    session_id = request.cookies.get(SESSION_COOKIE, "")
+    session = _load_session(session_id)
+    if not session or session.get("active", True) is False:
         raise HTTPException(status_code=401, detail="Сесія завершилася. Увійдіть знову.")
+    request.state.origin_session_id = session_id
+    request.state.origin_session = session
     session.setdefault("settings", {"language": "uk", "theme": "dark"})
     session.setdefault("boards", {})
     return session
 
 
 def _optional_session(request: Request) -> Optional[Dict[str, Any]]:
-    session = sessions.get(request.cookies.get(SESSION_COOKIE, ""))
-    if session:
+    session_id = request.cookies.get(SESSION_COOKIE, "")
+    session = _load_session(session_id)
+    if session and session.get("active", True) is not False:
+        request.state.origin_session_id = session_id
+        request.state.origin_session = session
         session.setdefault("settings", {"language": "uk", "theme": "dark"})
         session.setdefault("boards", {})
     return session
+
+
+def persist_request_session(request: Request) -> None:
+    session_id = getattr(request.state, "origin_session_id", "")
+    session = getattr(request.state, "origin_session", None)
+    if session_id and session and not getattr(request.state, "origin_session_deleted", False):
+        _save_session(session_id, session)
 
 
 def _payload(request: Request, data: Any) -> Dict[str, Any]:
@@ -334,13 +471,23 @@ async def github_callback(code: Optional[str] = None, error: Optional[str] = Non
             f"<h3>Не вдалося зв'язатися з GitHub: {html.escape(str(exc))}</h3>",
             status_code=502,
         )
-    session_id = secrets.token_urlsafe(32)
-    sessions[session_id] = {
-        "username": user_data.get("login", "Гість"),
-        "avatar_url": user_data.get("avatar_url", ""),
-        "settings": {"language": "uk", "theme": "dark"},
-        "boards": {},
-    }
+    existing = _find_github_session(user_data)
+    if existing:
+        session_id, session = existing
+        session["username"] = user_data.get("login", session.get("username", "Гість"))
+        session["avatar_url"] = user_data.get("avatar_url", session.get("avatar_url", ""))
+        session["active"] = True
+    else:
+        session_id = secrets.token_urlsafe(32)
+        session = {
+            "github_id": str(user_data.get("id", "")),
+            "username": user_data.get("login", "Гість"),
+            "avatar_url": user_data.get("avatar_url", ""),
+            "settings": {"language": "uk", "theme": "dark"},
+            "boards": {},
+            "active": True,
+        }
+    _save_session(session_id, session)
     response = RedirectResponse("/dashboard", status_code=303)
     response.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 7)
     return response
@@ -629,7 +776,11 @@ async def save_drawing(request: Request, board_id: str):
 async def logout(request: Request):
     session_id = request.cookies.get(SESSION_COOKIE)
     if session_id:
-        sessions.pop(session_id, None)
+        session = _load_session(session_id)
+        if session:
+            session["active"] = False
+            _save_session(session_id, session)
+        request.state.origin_session_deleted = True
     response = RedirectResponse("/", status_code=303)
     response.delete_cookie(SESSION_COOKIE)
     return response
