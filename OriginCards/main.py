@@ -1,12 +1,22 @@
 # -*- coding: utf-8 -*-
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from backend import router as auth_router
+try:
+    from .backend import persist_request_session, router as auth_router
+except ImportError:
+    from backend import persist_request_session, router as auth_router
 
 app = FastAPI(title="Origin")
 
 # Підключаємо маршрути авторизації з backend.py
 app.include_router(auth_router)
+
+
+@app.middleware("http")
+async def save_origin_session(request, call_next):
+    response = await call_next(request)
+    persist_request_session(request)
+    return response
 
 PAGE = r"""<!doctype html>
 <html lang="uk">
