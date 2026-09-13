@@ -161,6 +161,40 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_urlsafe(9)}"
 
 
+def _session_identity(session: Dict[str, Any]) -> str:
+    return str(session.get("github_id") or session.get("username") or "")
+
+
+def _friend_json(friend: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": friend.get("id", ""),
+        "username": friend.get("username", "Користувач"),
+        "avatar_url": friend.get("avatar_url", ""),
+        "added_at": friend.get("added_at", ""),
+    }
+
+
+def _ensure_social_fields(session: Dict[str, Any]) -> None:
+    session.setdefault("friends", [])
+    session.setdefault("friend_invite_token", secrets.token_urlsafe(18))
+
+
+def _find_session_by_invite(token: str):
+    if not token or len(token) > 100:
+        return None
+    with _db_lock:
+        connection = _db_connection()
+        try:
+            rows = connection.execute("SELECT session_id, data FROM origin_sessions").fetchall()
+            for row in rows:
+                data = row[1] if isinstance(row[1], dict) else json.loads(row[1])
+                if data.get("active", True) is not False and data.get("friend_invite_token") == token:
+                    return row[0], data
+            return None
+        finally:
+            connection.close()
+
+
 def _check_github_config() -> None:
     if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
         raise HTTPException(
@@ -185,6 +219,7 @@ def _session(request: Request) -> Dict[str, Any]:
     request.state.origin_session = session
     session.setdefault("settings", {"language": "uk", "theme": "dark"})
     session.setdefault("boards", {})
+    _ensure_social_fields(session)
     return session
 
 
@@ -196,6 +231,7 @@ def _optional_session(request: Request) -> Optional[Dict[str, Any]]:
         request.state.origin_session = session
         session.setdefault("settings", {"language": "uk", "theme": "dark"})
         session.setdefault("boards", {})
+        _ensure_social_fields(session)
     return session
 
 
@@ -371,8 +407,8 @@ _COMMON_SCRIPT = r"""
   document.body.classList.toggle('dark', theme === 'dark');
   window.originLanguage = localStorage.getItem('origin-language') || 'uk';
   const translations = {
-    uk:{boards:'Дошки',settings:'Налаштування',logout:'Вийти',editBoard:'Редагувати',addColumn:'＋ Колонка',cancel:'Скасувати',save:'Зберегти',language:'Мова',theme:'Тема',light:'Світла',dark:'Темна',profile:'Профіль',newBoard:'Нова дошка',create:'Створити',title:'Назва',description:'Опис',columnName:'Назва колонки',cardTitle:'Назва картки',details:'Детальний опис',emptyBoard:'Створи першу колонку, щоб почати.',emptyBoards:'Створи першу дошку — це займе секунду.',addCard:'＋ Додати картку',delete:'Видалити',rename:'Перейменувати',checklist:'Чекліст',addItem:'Додати пункт',drawing:'Малювання збережено.',workspace:'Твій робочий простір',hello:'Вітаємо',dashboardIntro:'Збирай ідеї, рухай картки та доводь задумане до результату.',preferences:'Персоналізація',nickname:'Нікнейм',avatarLabel:'Аватарка',columns:'колонки'},
-    en:{boards:'Boards',settings:'Settings',logout:'Log out',editBoard:'Edit',addColumn:'＋ Column',cancel:'Cancel',save:'Save',language:'Language',theme:'Theme',light:'Light',dark:'Dark',profile:'Profile',newBoard:'New board',create:'Create',title:'Title',description:'Description',columnName:'Column name',cardTitle:'Card title',details:'Detailed description',emptyBoard:'Create your first column to get started.',emptyBoards:'Create your first board — it only takes a second.',addCard:'＋ Add card',delete:'Delete',rename:'Rename',checklist:'Checklist',addItem:'Add item',drawing:'Drawing saved.',workspace:'Your workspace',hello:'Welcome',dashboardIntro:'Gather ideas, move cards, and turn plans into progress.',preferences:'Personalization',nickname:'Nickname',avatarLabel:'Avatar',columns:'columns'}
+    uk:{boards:'Дошки',friends:'Друзі',friendsIntro:'Додавай друзів за спеціальним посиланням.',createLink:'Створити посилання',addFriend:'Додати друга',emptyFriends:'Тут ще немає друзів.',linkCopied:'Посилання скопійовано.',friendAdded:'Друг доданий.',settings:'Налаштування',logout:'Вийти',editBoard:'Редагувати',addColumn:'＋ Колонка',cancel:'Скасувати',save:'Зберегти',language:'Мова',theme:'Тема',light:'Світла',dark:'Темна',profile:'Профіль',newBoard:'Нова дошка',create:'Створити',title:'Назва',description:'Опис',columnName:'Назва колонки',cardTitle:'Назва картки',details:'Детальний опис',emptyBoard:'Створи першу колонку, щоб почати.',emptyBoards:'Створи першу дошку — це займе секунду.',addCard:'＋ Додати картку',delete:'Видалити',rename:'Перейменувати',checklist:'Чекліст',addItem:'Додати пункт',drawing:'Малювання збережено.',workspace:'Твій робочий простір',hello:'Вітаємо',dashboardIntro:'Збирай ідеї, рухай картки та доводь задумане до результату.',preferences:'Персоналізація',nickname:'Нікнейм',avatarLabel:'Аватарка',columns:'колонки'},
+    en:{boards:'Boards',friends:'Friends',friendsIntro:'Add friends using a special link.',createLink:'Create link',addFriend:'Add friend',emptyFriends:'You have no friends yet.',linkCopied:'Link copied.',friendAdded:'Friend added.',settings:'Settings',logout:'Log out',editBoard:'Edit',addColumn:'＋ Column',cancel:'Cancel',save:'Save',language:'Language',theme:'Theme',light:'Light',dark:'Dark',profile:'Profile',newBoard:'New board',create:'Create',title:'Title',description:'Description',columnName:'Column name',cardTitle:'Card title',details:'Detailed description',emptyBoard:'Create your first column to get started.',emptyBoards:'Create your first board — it only takes a second.',addCard:'＋ Add card',delete:'Delete',rename:'Rename',checklist:'Checklist',addItem:'Add item',drawing:'Drawing saved.',workspace:'Your workspace',hello:'Welcome',dashboardIntro:'Gather ideas, move cards, and turn plans into progress.',preferences:'Personalization',nickname:'Nickname',avatarLabel:'Avatar',columns:'columns'}
   };
   window.t = key => (translations[window.originLanguage] || translations.uk)[key] || key;
   window.applyLanguage = () => { document.documentElement.lang=window.originLanguage; document.querySelectorAll('[data-i18n]').forEach(el=>el.textContent=t(el.dataset.i18n)); };
@@ -508,14 +544,15 @@ async def dashboard(request: Request):
       <div class="account"><button class="avatar-button" id="avatarButton" aria-label="Профіль">{avatar_markup}</button>
       <div class="menu" id="accountMenu"><a href="/settings" data-i18n="settings">Налаштування</a><a href="/auth/logout" data-i18n="logout">Вийти</a></div></div>
     </div>
-    <main class="dashboard"><section class="welcome"><p class="eyebrow" data-i18n="workspace">Твій робочий простір</p><h1><span data-i18n="hello">Вітаємо</span>, {username}! 👋</h1><p class="muted" data-i18n="dashboardIntro">Збирай ідеї, рухай картки та доводь задумане до результату.</p>
-      <a class="button primary" href="/boards/new" data-i18n="newBoard">＋ Нова дошка</a></section>
-      <section class="board-list"><div class="list-head"><h2 data-i18n="boards">Дошки</h2><button class="button ghost" id="quickCreate" data-i18n="newBoard">＋ Нова дошка</button></div><div id="boardList" class="board-grid"></div></section></main>
+    <main class="dashboard"><section class="welcome"><p class="eyebrow" data-i18n="workspace">Твій робочий простір</p><h1><span data-i18n="hello">Вітаємо</span>, {username}! 👋</h1><p class="muted" data-i18n="dashboardIntro">Збирай ідеї, рухай картки та доводь задумане до результату.</p></section>
+      <nav class="dashboard-tabs" aria-label="Розділи"><button class="dashboard-tab active" data-tab="boards" data-i18n="boards">Дошки</button><button class="dashboard-tab" data-tab="friends" data-i18n="friends">Друзі</button></nav>
+      <section class="dashboard-panel active" data-panel="boards"><div class="list-head"><h2 data-i18n="boards">Дошки</h2><button class="button primary" id="quickCreate" data-i18n="newBoard">＋ Нова дошка</button></div><div id="boardList" class="board-grid"></div></section>
+      <section class="dashboard-panel" data-panel="friends"><div class="list-head"><div><h2 data-i18n="friends">Друзі</h2><p class="muted" data-i18n="friendsIntro">Додавай друзів за спеціальним посиланням.</p></div><button class="button primary" id="createInvite" data-i18n="createLink">Створити посилання</button></div><div class="friend-add"><input id="friendLink" placeholder="Встав посилання друга"><button class="button ghost" id="addFriend" data-i18n="addFriend">Додати друга</button></div><p class="form-status" id="friendsStatus"></p><div id="friendList" class="friend-grid"></div></section></main>
     <script>
-    (()=>{{const list=document.getElementById('boardList');const render=async()=>{{const r=await fetch('/api/boards');const boards=await r.json();list.replaceChildren();if(!boards.length){{const e=document.createElement('p');e.className='muted';e.dataset.i18n='emptyBoards';e.textContent=window.t('emptyBoards');list.append(e);return}}boards.forEach(b=>{{const a=document.createElement('a');a.className='board-tile';a.href='/boards/'+encodeURIComponent(b.id);const h=document.createElement('h3');h.textContent=b.title;const p=document.createElement('p');p.textContent=b.description||' ';const s=document.createElement('span');s.textContent=b.categories+' '+window.t('columns');a.append(h,p,s);list.append(a)}})}};document.getElementById('quickCreate').onclick=()=>location.href='/boards/new';render()}})();
+    (()=>{{const list=document.getElementById('boardList'),friendList=document.getElementById('friendList'),status=document.getElementById('friendsStatus');const api=async(url,options={{}})=>{{const r=await fetch(url,{{headers:{{'Content-Type':'application/json'}},...options}});const x=await r.json().catch(()=>({{}}));if(!r.ok)throw new Error(x.detail||'Помилка');return x}};const renderBoards=async()=>{{const r=await api('/api/boards');list.replaceChildren();if(!r.length){{const e=document.createElement('p');e.className='muted';e.textContent=window.t('emptyBoards');list.append(e);return}}r.forEach(b=>{{const a=document.createElement('a');a.className='board-tile';a.href='/boards/'+encodeURIComponent(b.id);const h=document.createElement('h3');h.textContent=b.title;const p=document.createElement('p');p.textContent=b.description||' ';const s=document.createElement('span');s.textContent=b.categories+' '+window.t('columns');a.append(h,p,s);list.append(a)}})}};const renderFriends=async()=>{{const r=await api('/api/friends');friendList.replaceChildren();if(!r.friends.length){{const e=document.createElement('p');e.className='muted';e.textContent=window.t('emptyFriends');friendList.append(e);return}}r.friends.forEach(f=>{{const card=document.createElement('div');card.className='friend-card';const avatar=f.avatar_url?`<img src="${{f.avatar_url}}" alt="">`:'<span>✦</span>';card.innerHTML=avatar+`<strong>${{f.username}}</strong>`;friendList.append(card)}})}};document.querySelectorAll('.dashboard-tab').forEach(tab=>tab.onclick=()=>{{document.querySelectorAll('.dashboard-tab,.dashboard-panel').forEach(el=>el.classList.remove('active'));tab.classList.add('active');document.querySelector(`[data-panel="${{tab.dataset.tab}}"]`).classList.add('active');if(tab.dataset.tab==='friends')renderFriends()}});document.getElementById('quickCreate').onclick=()=>location.href='/boards/new';document.getElementById('createInvite').onclick=async()=>{{try{{const x=await api('/api/friends/invite',{{method:'POST'}});await navigator.clipboard.writeText(x.link);status.textContent=window.t('linkCopied')}}catch(e){{status.textContent=e.message}}}};document.getElementById('addFriend').onclick=async()=>{{try{{await api('/api/friends/add',{{method:'POST',body:JSON.stringify({{link:document.getElementById('friendLink').value}})}});status.textContent=window.t('friendAdded');document.getElementById('friendLink').value='';renderFriends()}}catch(e){{status.textContent=e.message}}}};renderBoards()}})();
     </script>
     """
-    return HTMLResponse(_app_page(session, content).replace("</style>", ".welcome{padding:82px 0 60px}.eyebrow{display:inline-block;margin:0 0 14px;color:var(--blue);font-weight:800;text-transform:uppercase;font-size:12px;letter-spacing:.8px}.welcome h1{margin:0 0 12px;font-size:clamp(34px,6vw,60px);letter-spacing:-2px}.welcome .muted{max-width:560px;margin-bottom:25px}.board-list{padding-top:12px}.list-head{display:flex;align-items:center;justify-content:space-between;gap:15px;margin-bottom:15px}.list-head h2{margin:0;font-size:25px}.board-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:15px}.board-tile{min-height:150px;padding:20px;border:1px solid var(--line);border-radius:17px;background:var(--surface);box-shadow:var(--shadow);transition:.2s}.board-tile:hover{transform:translateY(-3px);border-color:var(--blue)}.board-tile h3{margin:0 0 8px;font-size:19px}.board-tile p{min-height:42px;margin:0 0 14px;color:var(--muted);line-height:1.45}.board-tile span{color:var(--blue);font-size:12px;font-weight:750}</style>"))
+    return HTMLResponse(_app_page(session, content).replace("</style>", ".welcome{padding:58px 0 35px}.eyebrow{display:inline-block;margin:0 0 14px;color:var(--blue);font-weight:800;text-transform:uppercase;font-size:12px;letter-spacing:.8px}.welcome h1{margin:0 0 12px;font-size:clamp(34px,6vw,60px);letter-spacing:-2px}.welcome .muted{max-width:560px;margin-bottom:25px}.dashboard-tabs{display:flex;gap:8px;margin-bottom:22px;border-bottom:1px solid var(--line)}.dashboard-tab{padding:11px 17px;border:0;border-bottom:2px solid transparent;color:var(--muted);background:transparent;font:inherit;font-weight:750;cursor:pointer}.dashboard-tab.active{color:var(--blue);border-bottom-color:var(--blue)}.dashboard-panel{display:none}.dashboard-panel.active{display:block}.list-head{display:flex;align-items:center;justify-content:space-between;gap:15px;margin-bottom:15px}.list-head h2{margin:0;font-size:25px}.list-head .muted{margin:5px 0 0}.board-grid,.friend-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:15px}.board-tile{min-height:150px;padding:20px;border:1px solid var(--line);border-radius:17px;background:var(--surface);box-shadow:var(--shadow);transition:.2s}.board-tile:hover{transform:translateY(-3px);border-color:var(--blue)}.board-tile h3{margin:0 0 8px;font-size:19px}.board-tile p{min-height:42px;margin:0 0 14px;color:var(--muted);line-height:1.45}.board-tile span{color:var(--blue);font-size:12px;font-weight:750}.friend-add{display:flex;gap:9px;margin:22px 0 10px}.friend-add input{flex:1;min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:10px;color:var(--ink);background:var(--surface);font:inherit}.friend-card{display:flex;align-items:center;gap:12px;padding:16px;border:1px solid var(--line);border-radius:15px;background:var(--surface)}.friend-card img,.friend-card>span{width:38px;height:38px;display:grid;place-items:center;border:2px solid var(--blue);border-radius:50%;object-fit:cover}.friend-card strong{font-size:16px}</style>"))
 
 
 @router.get("/boards", response_class=HTMLResponse)
@@ -595,6 +632,78 @@ async def update_settings(request: Request):
         raise HTTPException(status_code=422, detail="Непідтримуване налаштування.")
     session["settings"] = {"language": language, "theme": theme}
     return session["settings"]
+
+
+@router.get("/api/friends")
+async def list_friends(request: Request):
+    session = _session(request)
+    return {"friends": [_friend_json(friend) for friend in session["friends"]]}
+
+
+@router.post("/api/friends/invite")
+async def create_friend_invite(request: Request):
+    session = _session(request)
+    _ensure_social_fields(session)
+    return {
+        "link": f"{str(request.base_url).rstrip('/')}/friends/join?token="
+        f"{urllib.parse.quote(session['friend_invite_token'])}",
+    }
+
+
+@router.post("/api/friends/add")
+async def add_friend(request: Request):
+    session = _session(request)
+    payload = await _json(request)
+    link = str(payload.get("link", "")).strip()
+    parsed = urllib.parse.urlparse(link)
+    token = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
+    if not token and link:
+        token = link
+    return _add_friend_by_token(request, session, token)
+
+
+def _add_friend_by_token(request: Request, session: Dict[str, Any], token: str):
+    owner_result = _find_session_by_invite(token)
+    if not owner_result:
+        raise HTTPException(status_code=404, detail="Посилання на друга недійсне.")
+    owner_session_id, owner = owner_result
+    current_id = _session_identity(session)
+    owner_id = _session_identity(owner)
+    if not current_id or current_id == owner_id:
+        raise HTTPException(status_code=422, detail="Не можна додати самого себе.")
+
+    _ensure_social_fields(session)
+    _ensure_social_fields(owner)
+    if not any(friend.get("id") == owner_id for friend in session["friends"]):
+        session["friends"].append({
+            "id": owner_id,
+            "username": owner.get("username", "Користувач"),
+            "avatar_url": owner.get("avatar_url", ""),
+            "added_at": _now(),
+        })
+    if not any(friend.get("id") == current_id for friend in owner["friends"]):
+        owner["friends"].append({
+            "id": current_id,
+            "username": session.get("username", "Користувач"),
+            "avatar_url": session.get("avatar_url", ""),
+            "added_at": _now(),
+        })
+    _save_session(owner_session_id, owner)
+    return {"friend": _friend_json(session["friends"][-1]), "friends": [_friend_json(friend) for friend in session["friends"]]}
+
+
+@router.get("/friends/join", response_class=HTMLResponse)
+async def friend_join(request: Request, token: Optional[str] = None):
+    session = _optional_session(request)
+    if not session:
+        return RedirectResponse("/login", status_code=303)
+    if not token:
+        return RedirectResponse("/dashboard", status_code=303)
+    try:
+        _add_friend_by_token(request, session, token)
+    except HTTPException:
+        return RedirectResponse("/dashboard?friends_error=1", status_code=303)
+    return RedirectResponse("/dashboard?friends_added=1", status_code=303)
 
 
 @router.get("/api/boards")
