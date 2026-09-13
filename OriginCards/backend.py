@@ -3,15 +3,19 @@
 
 import html
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 import secrets
+import smtplib
 import sqlite3
 import threading
 import urllib.parse
 import urllib.request
 from urllib.error import HTTPError, URLError
 from datetime import datetime, timezone
+from email.message import EmailMessage
 from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
@@ -25,6 +29,11 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 GITHUB_REDIRECT_URI = os.getenv(
     "GITHUB_REDIRECT_URI", "http://localhost:8000/auth/callback"
 )
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USERNAME or "")
 SESSION_COOKIE = "origin_session"
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 if DATABASE_URL.startswith("postgres://"):
@@ -91,10 +100,8 @@ def _load_session(session_id: str) -> Optional[Dict[str, Any]]:
             connection.close()
 
 
-def _find_github_session(user_data: Dict[str, Any]):
-    github_id = str(user_data.get("id", ""))
-    username = str(user_data.get("login", ""))
-    if not github_id and not username:
+def _find_identity_session(provider: str, provider_id: str, email: str):
+    if not provider_id and not email:
         return None
     with _db_lock:
         connection = _db_connection()
@@ -102,13 +109,22 @@ def _find_github_session(user_data: Dict[str, Any]):
             rows = connection.execute("SELECT session_id, data FROM origin_sessions").fetchall()
             for row in rows:
                 data = row[1] if isinstance(row[1], dict) else json.loads(row[1])
-                if (github_id and str(data.get("github_id", "")) == github_id) or (
-                    not data.get("github_id") and username and data.get("username") == username
-                ):
+                if (
+                    provider_id
+                    and str(data.get(f"{provider}_id", "")) == provider_id
+                ) or (email and data.get("email", "").lower() == email.lower()):
                     return row[0], data
             return None
         finally:
             connection.close()
+
+
+def _find_github_session(user_data: Dict[str, Any]):
+    return _find_identity_session(
+        "github",
+        str(user_data.get("id", "")),
+        str(user_data.get("email", "") or ""),
+    )
 
 
 def _save_session(session_id: str, session: Dict[str, Any]) -> None:
@@ -161,6 +177,23 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_urlsafe(9)}"
 
 
+def _hash_password(password: str, salt: Optional[bytes] = None) -> str:
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, 240_000
+    )
+    return f"{salt.hex()}${digest.hex()}"
+
+
+def _check_password(password: str, stored: str) -> bool:
+    try:
+        salt_hex, digest_hex = stored.split("$", 1)
+        expected = _hash_password(password, bytes.fromhex(salt_hex)).split("$", 1)[1]
+        return hmac.compare_digest(expected, digest_hex)
+    except (TypeError, ValueError):
+        return False
+
+
 def _session_identity(session: Dict[str, Any]) -> str:
     return str(session.get("github_id") or session.get("username") or "")
 
@@ -193,6 +226,55 @@ def _find_session_by_invite(token: str):
             return None
         finally:
             connection.close()
+
+
+def _find_email_token(token: str):
+    with _db_lock:
+        connection = _db_connection()
+        try:
+            rows = connection.execute("SELECT session_id, data FROM origin_sessions").fetchall()
+            for row in rows:
+                data = row[1] if isinstance(row[1], dict) else json.loads(row[1])
+                if data.get("email_verification_token") == token:
+                    return row[0], data
+            return None
+        finally:
+            connection.close()
+
+
+def _send_verification_email(email: str, token: str, request: Request) -> None:
+    if not SMTP_HOST or not SMTP_USERNAME or not SMTP_PASSWORD or not SMTP_FROM:
+        raise HTTPException(
+            status_code=503,
+            detail="Email-вхід не налаштований на сервері. Додайте SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD і SMTP_FROM.",
+        )
+    link = f"{str(request.base_url).rstrip('/')}/auth/verify?token={urllib.parse.quote(token)}"
+    message = EmailMessage()
+    message["Subject"] = "Підтвердіть реєстрацію в Origin"
+    message["From"] = SMTP_FROM
+    message["To"] = email
+    message.set_content(
+        f"Ви зареєстрували акаунт в Origin.\n\n"
+        f"Натисніть кнопку або відкрийте посилання, щоб підтвердити email:\n{link}\n\n"
+        "Посилання дійсне 24 години."
+    )
+    message.add_alternative(
+        f"""<html><body style="font-family:Arial,sans-serif">
+        <h2>Вітаємо в Origin!</h2>
+        <p>Ваш акаунт зареєстровано. Натисніть кнопку, щоб підтвердити email:</p>
+        <p><a href="{html.escape(link, quote=True)}"
+        style="display:inline-block;padding:12px 20px;border-radius:8px;
+        color:#fff;background:#5865f2;text-decoration:none">Підтвердити email</a></p>
+        <p>Посилання дійсне 24 години.</p></body></html>""",
+        subtype="html",
+    )
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+            smtp.starttls()
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(message)
+    except (OSError, smtplib.SMTPException) as exc:
+        raise HTTPException(status_code=502, detail="Не вдалося відправити email.") from exc
 
 
 def _check_github_config() -> None:
@@ -475,6 +557,230 @@ async def github_login():
     _check_github_config()
     params = urlencode({"client_id": GITHUB_CLIENT_ID, "redirect_uri": GITHUB_REDIRECT_URI, "scope": "read:user"})
     return RedirectResponse(f"https://github.com/login/oauth/authorize?{params}")
+
+
+async def _oauth_login(provider: str):
+    client_id, _, redirect_uri, _ = _oauth_config(provider)
+    state = secrets.token_urlsafe(24)
+    if provider == "google":
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+            "access_type": "online",
+            "prompt": "select_account",
+        }
+        authorize_url = "https://accounts.google.com/o/oauth2/v2/auth"
+    else:
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "openid profile email",
+            "state": state,
+        }
+        authorize_url = "https://api.login.yahoo.com/oauth2/request_auth"
+    response = RedirectResponse(
+        f"{authorize_url}?{urllib.parse.urlencode(params)}", status_code=303
+    )
+    response.set_cookie(
+        OAUTH_STATE_COOKIE,
+        state,
+        httponly=True,
+        samesite="lax",
+        max_age=600,
+    )
+    return response
+
+
+# Legacy social login implementation retained for data compatibility; no public route.
+async def google_login():
+    return await _oauth_login("google")
+
+
+async def yahoo_login():
+    return await _oauth_login("yahoo")
+
+
+async def _oauth_callback(request: Request, provider: str, code: Optional[str], state: Optional[str], error: Optional[str]):
+    client_id, client_secret, redirect_uri, _ = _oauth_config(provider)
+    if error:
+        return HTMLResponse(
+            f"<h3>Авторизацію скасовано: {html.escape(error)}</h3>",
+            status_code=400,
+        )
+    if not code or not state or state != request.cookies.get(OAUTH_STATE_COOKIE):
+        return HTMLResponse(
+            "<h3>Некоректний або прострочений запит авторизації.</h3>",
+            status_code=400,
+        )
+    token_url = (
+        "https://oauth2.googleapis.com/token"
+        if provider == "google"
+        else "https://api.login.yahoo.com/oauth2/get_token"
+    )
+    user_url = (
+        "https://openidconnect.googleapis.com/v1/userinfo"
+        if provider == "google"
+        else "https://api.login.yahoo.com/openid/v1/userinfo"
+    )
+    token_headers = {"Accept": "application/json"}
+    if provider == "yahoo":
+        basic = base64.b64encode(
+            f"{client_id}:{client_secret}".encode("utf-8")
+        ).decode("ascii")
+        token_headers["Authorization"] = f"Basic {basic}"
+    token_payload = {
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    if provider == "google":
+        token_payload.update(
+            {"client_id": client_id, "client_secret": client_secret}
+        )
+    try:
+        token_data = await asyncio.to_thread(
+            _github_request, token_url, token_payload, token_headers
+        )
+        access_token = token_data.get("access_token")
+        if not access_token:
+            raise ValueError(token_data.get("error_description", "Токен не отримано."))
+        user_data = await asyncio.to_thread(
+            _github_request,
+            user_url,
+            None,
+            {
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
+        )
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        return HTMLResponse(
+            f"<h3>Не вдалося виконати вхід: {html.escape(str(exc))}</h3>",
+            status_code=502,
+        )
+    provider_id = str(user_data.get("sub") or user_data.get("id") or "")
+    email = str(user_data.get("email") or "").strip().lower()
+    username = str(
+        user_data.get("name")
+        or user_data.get("preferred_username")
+        or email.split("@")[0]
+        or "Гість"
+    )
+    avatar_url = str(user_data.get("picture") or user_data.get("profile_image_url") or "")
+    if not provider_id and not email:
+        return HTMLResponse(
+            "<h3>Сервіс не повернув дані користувача.</h3>", status_code=502
+        )
+    session_id = _oauth_session(provider, provider_id, email, username, avatar_url)
+    response = RedirectResponse("/boards", status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_id,
+        httponly=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 7,
+    )
+    response.delete_cookie(OAUTH_STATE_COOKIE)
+    return response
+
+
+async def google_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    return await _oauth_callback(request, "google", code, state, error)
+
+
+async def yahoo_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    return await _oauth_callback(request, "yahoo", code, state, error)
+
+
+@router.post("/auth/register")
+async def register(request: Request):
+    payload = await _json(request)
+    email = str(payload.get("email", "")).strip().lower()
+    password = str(payload.get("password", ""))
+    if "@" not in email or len(email) > 254:
+        raise HTTPException(status_code=422, detail="Введіть коректну email-адресу.")
+    if len(password) < 8:
+        raise HTTPException(status_code=422, detail="Пароль має містити щонайменше 8 символів.")
+    if _find_identity_session("email", "", email):
+        raise HTTPException(status_code=409, detail="Акаунт із цим email вже існує.")
+    token = secrets.token_urlsafe(32)
+    session_id = secrets.token_urlsafe(32)
+    session = {
+        "email": email,
+        "password_hash": _hash_password(password),
+        "email_verification_token": token,
+        "email_verification_expires": datetime.now(timezone.utc).timestamp() + 86400,
+        "email_verified": False,
+        "active": False,
+        "username": email.split("@")[0],
+        "settings": {"language": "uk", "theme": "dark"},
+        "boards": {},
+    }
+    _save_session(session_id, session)
+    try:
+        await asyncio.to_thread(_send_verification_email, email, token, request)
+    except HTTPException:
+        _delete_session(session_id)
+        raise
+    return {"message": "Лист із підтвердженням відправлено на email."}
+
+
+@router.post("/auth/login")
+async def login(request: Request):
+    payload = await _json(request)
+    email = str(payload.get("email", "")).strip().lower()
+    password = str(payload.get("password", ""))
+    found = _find_identity_session("email", "", email)
+    if not found:
+        raise HTTPException(status_code=401, detail="Неправильний email або пароль.")
+    session_id, session = found
+    if not session.get("email_verified"):
+        raise HTTPException(status_code=403, detail="Спочатку підтвердіть email у листі.")
+    if not _check_password(password, session.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Неправильний email або пароль.")
+    session["active"] = True
+    _save_session(session_id, session)
+    response = JSONResponse({"ok": True})
+    response.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 7)
+    return response
+
+
+@router.get("/auth/verify")
+async def verify_email(token: Optional[str] = None):
+    found = _find_email_token(token or "")
+    if not found:
+        return HTMLResponse("<h3>Посилання для підтвердження недійсне.</h3>", status_code=400)
+    session_id, session = found
+    if session.get("email_verification_expires", 0) < datetime.now(timezone.utc).timestamp():
+        return HTMLResponse("<h3>Посилання для підтвердження прострочене.</h3>", status_code=400)
+    session.pop("email_verification_token", None)
+    session.pop("email_verification_expires", None)
+    session["email_verified"] = True
+    session["active"] = True
+    _save_session(session_id, session)
+    response = RedirectResponse("/boards", status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_id,
+        httponly=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 7,
+    )
+    return response
 
 
 @router.get("/auth/callback")
