@@ -197,26 +197,14 @@ LOGIN_PAGE = r"""<!doctype html>
     h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: -0.5px; }
     p { margin: 0 0 28px;     color: var(--login-muted); font-size: 14px; line-height: 1.5; }
 
-    .github-btn {
-      width: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      padding: 14px;
-      border: 0;
-      border-radius: 14px;
-      background: #ffffff;
-      color: #0f131d;
-      font: 700 15px inherit;
-      cursor: pointer;
-      transition: transform 0.2s, box-shadow 0.2s;
-      text-decoration: none;
-    }
-    .github-btn:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 10px 25px rgba(255, 255, 255, 0.15);
-    }
+    .auth-tabs { display:flex; gap:8px; margin:18px 0 12px; }
+    .auth-tab { flex:1; padding:10px; border:1px solid #ffffff24; border-radius:10px; color:var(--login-muted); background:transparent; font-weight:700; cursor:pointer; }
+    .auth-tab.active { color:#fff; background:#5865f2; border-color:#5865f2; }
+    .auth-form { display:none; }
+    .auth-form.active { display:block; }
+    .auth-form input { width:100%; margin:6px 0; padding:13px; border:1px solid #ffffff24; border-radius:12px; color:var(--login-ink); background:transparent; font:14px inherit; }
+    .auth-form button { width:100%; margin-top:8px; padding:13px; border:0; border-radius:12px; color:#fff; background:#5865f2; font-weight:700; cursor:pointer; }
+    .auth-status { min-height:18px; margin:9px 0 0; font-size:12px; }
     .back-link {
       display: inline-block;
       margin-top: 24px;
@@ -236,15 +224,27 @@ LOGIN_PAGE = r"""<!doctype html>
 
   <div class="login-card">
     <a class="brand" href="/"><span class="mark">✦</span> origin</a>
-    <h1>З поверненням</h1>
-    <p>Увійди за допомогою свого облікового запису GitHub, щоб продовжити роботу з дошками.</p>
+    <h1 id="authTitle">Вхід</h1>
+    <p>Увійди або створи акаунт за допомогою email і пароля.</p>
 
-    <a class="github-btn" href="/auth/github">
+    <div style="display:none">
       <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
       </svg>
       Увійти через GitHub
-    </a>
+    </div>
+    <div class="auth-tabs"><button class="auth-tab active" data-mode="login">Увійти</button><button class="auth-tab" data-mode="register">Реєстрація</button></div>
+    <form class="auth-form active" id="loginForm">
+      <input type="email" name="email" placeholder="Email" required>
+      <input type="password" name="password" placeholder="Пароль" required>
+      <button type="submit">Увійти</button>
+    </form>
+    <form class="auth-form" id="registerForm">
+      <input type="email" name="email" placeholder="Email" required>
+      <input type="password" name="password" placeholder="Пароль (мінімум 8 символів)" minlength="8" required>
+      <button type="submit">Зареєструватися</button>
+    </form>
+    <div class="auth-status" id="authStatus"></div>
 
     <a class="back-link" href="/">← На головну</a>
   </div>
@@ -256,6 +256,24 @@ LOGIN_PAGE = r"""<!doctype html>
       document.body.classList.toggle('light', light);
       localStorage.setItem('origin-theme', light ? 'light' : 'dark');
     };
+    const status = document.getElementById('authStatus');
+    document.querySelectorAll('.auth-tab').forEach(tab => tab.onclick = () => {
+      document.querySelectorAll('.auth-tab,.auth-form').forEach(el => el.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(tab.dataset.mode + 'Form').classList.add('active');
+      document.getElementById('authTitle').textContent = tab.dataset.mode === 'login' ? 'Вхід' : 'Реєстрація';
+      status.textContent = '';
+    });
+    async function submitAuth(event, endpoint) {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:form.email.value.trim(), password:form.password.value})});
+      const data = await response.json().catch(() => ({}));
+      status.textContent = data.message || data.detail || 'Сталася помилка.';
+      if (response.ok && endpoint === '/auth/login') location.href = '/boards';
+    }
+    document.getElementById('loginForm').onsubmit = event => submitAuth(event, '/auth/login');
+    document.getElementById('registerForm').onsubmit = event => submitAuth(event, '/auth/register');
   </script>
 </body>
 </html>"""
