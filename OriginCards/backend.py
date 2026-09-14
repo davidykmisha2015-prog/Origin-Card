@@ -586,7 +586,10 @@ async def _oauth_callback(request: Request, provider: str, code: Optional[str], 
         )
     token_url = "https://oauth2.googleapis.com/token" if provider == "google" else "https://github.com/login/oauth/access_token"
     user_url = "https://openidconnect.googleapis.com/v1/userinfo" if provider == "google" else "https://api.github.com/user"
-    token_headers = {"Accept": "application/json"}
+    token_headers = {
+        "Accept": "application/json",
+        "User-Agent": "OriginCards/1.0",
+    }
     token_payload = {
         "code": code,
         "redirect_uri": redirect_uri,
@@ -610,6 +613,7 @@ async def _oauth_callback(request: Request, provider: str, code: Optional[str], 
             {
                 "Authorization": f"Bearer {access_token}",
                 "Accept": "application/json",
+                "User-Agent": "OriginCards/1.0",
             },
         )
         if provider == "github" and not user_data.get("email"):
@@ -620,12 +624,23 @@ async def _oauth_callback(request: Request, provider: str, code: Optional[str], 
                 {
                     "Authorization": f"Bearer {access_token}",
                     "Accept": "application/vnd.github+json",
+                    "User-Agent": "OriginCards/1.0",
                 },
             )
             if isinstance(emails, list):
                 primary = next((item for item in emails if item.get("primary")), None)
                 user_data["email"] = (primary or (emails[0] if emails else {})).get("email", "")
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+    except HTTPError as exc:
+        try:
+            details = exc.read().decode("utf-8", errors="replace")
+        except OSError:
+            details = str(exc)
+        return HTMLResponse(
+            "<h3>GitHub відхилив авторизацію.</h3>"
+            f"<p>{html.escape(details[:1000])}</p>",
+            status_code=502,
+        )
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
         return HTMLResponse(
             f"<h3>Не вдалося виконати вхід: {html.escape(str(exc))}</h3>",
             status_code=502,
@@ -669,6 +684,16 @@ async def google_callback_route(
 
 @router.get("/auth/callback")
 async def github_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    return await _oauth_callback(request, "github", code, state, error)
+
+
+@router.get("/auth/github/callback")
+async def github_callback_alias(
     request: Request,
     code: Optional[str] = None,
     state: Optional[str] = None,
