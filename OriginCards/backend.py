@@ -595,10 +595,9 @@ async def _oauth_callback(request: Request, provider: str, code: Optional[str], 
         "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
     }
-    if provider == "google":
-        token_payload.update(
-            {"client_id": client_id, "client_secret": client_secret}
-        )
+    token_payload.update(
+        {"client_id": client_id, "client_secret": client_secret}
+    )
     try:
         token_data = await asyncio.to_thread(
             _github_request, token_url, token_payload, token_headers
