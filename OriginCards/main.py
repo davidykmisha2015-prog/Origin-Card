@@ -197,14 +197,10 @@ LOGIN_PAGE = r"""<!doctype html>
     h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: -0.5px; }
     p { margin: 0 0 28px;     color: var(--login-muted); font-size: 14px; line-height: 1.5; }
 
-    .auth-tabs { display:flex; gap:8px; margin:18px 0 12px; }
-    .auth-tab { flex:1; padding:10px; border:1px solid #ffffff24; border-radius:10px; color:var(--login-muted); background:transparent; font-weight:700; cursor:pointer; }
-    .auth-tab.active { color:#fff; background:#5865f2; border-color:#5865f2; }
-    .auth-form { display:none; }
-    .auth-form.active { display:block; }
-    .auth-form input { width:100%; margin:6px 0; padding:13px; border:1px solid #ffffff24; border-radius:12px; color:var(--login-ink); background:transparent; font:14px inherit; }
-    .auth-form button { width:100%; margin-top:8px; padding:13px; border:0; border-radius:12px; color:#fff; background:#5865f2; font-weight:700; cursor:pointer; }
-    .auth-status { min-height:18px; margin:9px 0 0; font-size:12px; }
+    .oauth-btn { display:flex; align-items:center; justify-content:center; width:100%; margin:10px 0; padding:13px; border-radius:12px; color:#fff; font-weight:700; text-decoration:none; transition:transform .2s, opacity .2s; }
+    .oauth-btn:hover { transform:translateY(-1px); opacity:.92; }
+    .oauth-btn.github { background:#24292f; }
+    .oauth-btn.google { background:#4285f4; }
     .back-link {
       display: inline-block;
       margin-top: 24px;
@@ -224,8 +220,10 @@ LOGIN_PAGE = r"""<!doctype html>
 
   <div class="login-card">
     <a class="brand" href="/"><span class="mark">✦</span> origin</a>
-    <h1 id="authTitle">Вхід</h1>
-    <p>Увійди або створи акаунт за допомогою email і пароля.</p>
+    <h1>З поверненням</h1>
+    <p>Увійди через GitHub або Google, щоб продовжити роботу з дошками.</p>
+    <a class="oauth-btn github" href="/auth/github">Увійти через GitHub</a>
+    <a class="oauth-btn google" href="/auth/google">Увійти через Google</a>
 
     <div style="display:none">
       <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor">
@@ -233,18 +231,6 @@ LOGIN_PAGE = r"""<!doctype html>
       </svg>
       Увійти через GitHub
     </div>
-    <div class="auth-tabs"><button class="auth-tab active" data-mode="login">Увійти</button><button class="auth-tab" data-mode="register">Реєстрація</button></div>
-    <form class="auth-form active" id="loginForm">
-      <input type="email" name="email" placeholder="Email" required>
-      <input type="password" name="password" placeholder="Пароль" required>
-      <button type="submit">Увійти</button>
-    </form>
-    <form class="auth-form" id="registerForm">
-      <input type="email" name="email" placeholder="Email" required>
-      <input type="password" name="password" placeholder="Пароль (мінімум 8 символів)" minlength="8" required>
-      <button type="submit">Зареєструватися</button>
-    </form>
-    <div class="auth-status" id="authStatus"></div>
 
     <a class="back-link" href="/">← На головну</a>
   </div>
@@ -256,24 +242,6 @@ LOGIN_PAGE = r"""<!doctype html>
       document.body.classList.toggle('light', light);
       localStorage.setItem('origin-theme', light ? 'light' : 'dark');
     };
-    const status = document.getElementById('authStatus');
-    document.querySelectorAll('.auth-tab').forEach(tab => tab.onclick = () => {
-      document.querySelectorAll('.auth-tab,.auth-form').forEach(el => el.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById(tab.dataset.mode + 'Form').classList.add('active');
-      document.getElementById('authTitle').textContent = tab.dataset.mode === 'login' ? 'Вхід' : 'Реєстрація';
-      status.textContent = '';
-    });
-    async function submitAuth(event, endpoint) {
-      event.preventDefault();
-      const form = event.currentTarget;
-      const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:form.email.value.trim(), password:form.password.value})});
-      const data = await response.json().catch(() => ({}));
-      status.textContent = data.message || data.detail || 'Сталася помилка.';
-      if (response.ok && endpoint === '/auth/login') location.href = '/boards';
-    }
-    document.getElementById('loginForm').onsubmit = event => submitAuth(event, '/auth/login');
-    document.getElementById('registerForm').onsubmit = event => submitAuth(event, '/auth/register');
   </script>
 </body>
 </html>"""
