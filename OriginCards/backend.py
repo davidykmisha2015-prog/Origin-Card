@@ -614,22 +614,9 @@ async def _oauth_callback(request: Request, provider: str, code: Optional[str], 
                 "Authorization": f"Bearer {access_token}",
                 "Accept": "application/json",
                 "User-Agent": "OriginCards/1.0",
+                "X-GitHub-Api-Version": "2022-11-28",
             },
         )
-        if provider == "github" and not user_data.get("email"):
-            emails = await asyncio.to_thread(
-                _github_request,
-                "https://api.github.com/user/emails",
-                None,
-                {
-                    "Authorization": f"Bearer {access_token}",
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "OriginCards/1.0",
-                },
-            )
-            if isinstance(emails, list):
-                primary = next((item for item in emails if item.get("primary")), None)
-                user_data["email"] = (primary or (emails[0] if emails else {})).get("email", "")
     except HTTPError as exc:
         try:
             details = exc.read().decode("utf-8", errors="replace")
@@ -637,6 +624,7 @@ async def _oauth_callback(request: Request, provider: str, code: Optional[str], 
             details = str(exc)
         return HTMLResponse(
             "<h3>GitHub відхилив авторизацію.</h3>"
+            f"<p>{html.escape(exc.url or '')}</p>"
             f"<p>{html.escape(details[:1000])}</p>",
             status_code=502,
         )
